@@ -11,13 +11,40 @@ type AsyncGeneratorState = {
   refcount: number;
   generator: AsyncGenerator;
   closed: boolean;
+  pendingNext?: PendingNext;
 };
+
+type PendingNext = {
+  settled: boolean;
+  promise: Promise<IteratorResult<unknown>>;
+}
+
+function startPendingNext(state: AsyncGeneratorState, value: unknown): PendingNext {
+  let pending: PendingNext = {
+    settled: false,
+    promise: Promise.resolve().then(() => state.generator.next(value)),
+  };
+  pending.promise = pending.promise.then(
+      result => {
+        pending.settled = true;
+        if (result.done) {
+          state.closed = true;
+        }
+        return result;
+      },
+      err => {
+        pending.settled = true;
+        throw err;
+      });
+  return pending;
+}
 
 class AsyncGeneratorStubHook extends StubHook {
   private state?: AsyncGeneratorState;
 
   static create(gen: AsyncGenerator): AsyncGeneratorStubHook {
-    return new AsyncGeneratorStubHook({ refcount: 1, generator: gen, closed: false });
+    return new AsyncGeneratorStubHook(
+        { refcount: 1, generator: gen, closed: false, pendingNext: undefined });
   }
 
   private constructor(state: AsyncGeneratorState, dupFrom?: AsyncGeneratorStubHook) {
@@ -44,14 +71,36 @@ class AsyncGeneratorStubHook extends StubHook {
       switch (method) {
         case "next":
           func = async (value: unknown) => {
-            let result = await state.generator.next(value);
-            if (result.done) state.closed = true;
-            return result;
+            if (state.pendingNext) {
+              if (value !== undefined) {
+                throw new Error(
+                    "Cannot call next(value) while AsyncGenerator consume prefetch is in flight.");
+              }
+              let pending = state.pendingNext;
+              try {
+                return await pending.promise;
+              } finally {
+                if (state.pendingNext === pending) {
+                  state.pendingNext = undefined;
+                }
+              }
+            }
+
+            return await startPendingNext(state, value).promise;
           };
           break;
 
         case "return":
           func = async (value: unknown) => {
+            if (state.pendingNext) {
+              try {
+                await state.pendingNext.promise;
+              } catch {
+                // Ignore -- return() should still proceed.
+              } finally {
+                state.pendingNext = undefined;
+              }
+            }
             let result = await state.generator.return(value);
             if (result.done) state.closed = true;
             return result;
@@ -60,6 +109,15 @@ class AsyncGeneratorStubHook extends StubHook {
 
         case "throw":
           func = async (error: unknown) => {
+            if (state.pendingNext) {
+              try {
+                await state.pendingNext.promise;
+              } catch {
+                // Ignore -- throw() should still proceed.
+              } finally {
+                state.pendingNext = undefined;
+              }
+            }
             let result = await state.generator.throw(error);
             if (result.done) state.closed = true;
             return result;
@@ -74,7 +132,28 @@ class AsyncGeneratorStubHook extends StubHook {
 
             let result: IteratorResult<unknown>[] = [];
             for (let i = 0; i < <number>want; i++) {
-              let item = await state.generator.next(undefined);
+              let pending = state.pendingNext;
+              if (!pending) {
+                pending = startPendingNext(state, undefined);
+                state.pendingNext = pending;
+              }
+
+              // Only batch quickly-available items. If the next item is delayed, return what we
+              // already have and let the pending advance complete for the next roundtrip.
+              if (!pending.settled && result.length > 0) {
+                let readySoon = await Promise.race([
+                  pending.promise.then(() => true, () => true),
+                  new Promise<boolean>(resolve => setTimeout(() => resolve(false), 0)),
+                ]);
+                if (!readySoon) {
+                  break;
+                }
+              }
+
+              let item = await pending.promise;
+              if (state.pendingNext === pending) {
+                state.pendingNext = undefined;
+              }
               result.push(item);
               if (item.done) {
                 state.closed = true;
@@ -136,8 +215,16 @@ class AsyncGeneratorStubHook extends StubHook {
     if (state) {
       if (--state.refcount === 0) {
         if (!state.closed) {
-          state.generator.return(undefined).catch(() => {});
+          let pending = state.pendingNext?.promise;
+          state.pendingNext = undefined;
           state.closed = true;
+          if (pending) {
+            void pending.finally(() => {
+              state.generator.return(undefined).catch(() => {});
+            });
+          } else {
+            state.generator.return(undefined).catch(() => {});
+          }
         }
       }
     }
@@ -382,6 +469,9 @@ class RemoteAsyncGeneratorEngine {
     if (this.done && this.buffer.length === 0) return { done: true, value: undefined };
 
     if (value !== undefined) {
+      if (this.inFlightRefill) {
+        await this.inFlightRefill;
+      }
       if (this.buffer.length > 0 || this.inFlightRefill) {
         throw new Error(
             "next(value) cannot be used when consumed items are buffered or refilling in flight.");

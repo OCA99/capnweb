@@ -2317,6 +2317,14 @@ describe("AsyncGenerator over RPC", () => {
       }
       return result;
     }
+
+    async *job(): AsyncGenerator<string> {
+      yield "Job started";
+      await new Promise(resolve => setTimeout(resolve, 20));
+      yield "Job in progress";
+      await new Promise(resolve => setTimeout(resolve, 20));
+      yield "Job completed";
+    }
   }
 
   it("returns a native AsyncGenerator with strict default behavior", async () => {
@@ -2374,6 +2382,36 @@ describe("AsyncGenerator over RPC", () => {
 
     await expect(gen.next(123)).rejects.toThrow(
         "next(value) cannot be used when consumed items are buffered or refilling in flight.");
+  });
+
+  it("consume() defaults do not collapse delayed yields into one burst", async () => {
+    await using harness = new TestHarness(new GeneratorTarget());
+
+    let clientMessages: any[] = [];
+    let origClientSend = harness.clientTransport.send;
+    harness.clientTransport.send = async function(message: string) {
+      clientMessages.push(JSON.parse(message));
+      return origClientSend.call(this, message);
+    };
+
+    using gen: any = await harness.stub.job();
+    gen.consume();
+
+    let values: string[] = [];
+    for await (let value of gen) {
+      values.push(value);
+    }
+    expect(values).toEqual(["Job started", "Job in progress", "Job completed"]);
+
+    let nextBatchCalls = clientMessages.filter(
+        msg => msg[0] === "push" &&
+               msg[1] instanceof Array &&
+               msg[1][0] === "pipeline" &&
+               msg[1][2] instanceof Array &&
+               msg[1][2][0] === "nextBatch");
+
+    // Delayed yields should require multiple batch trips instead of one long coalesced call.
+    expect(nextBatchCalls.length).toBeGreaterThan(1);
   });
 
   it("supports passing a client AsyncGenerator as params", async () => {
