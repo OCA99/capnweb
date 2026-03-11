@@ -1283,23 +1283,38 @@ export class RpcPayload {
 
       // Add disposer to result.
       if (result instanceof Object) {
-        if (!(Symbol.dispose in result)) {
-          // We want the disposer to be non-enumerable as otherwise it gets in the way of things
-          // like unit tests trying to deep-compare the result to an object.
-          Object.defineProperty(result, Symbol.dispose, {
-            // NOTE: Using `this.dispose.bind(this)` here causes Playwright's build of
-            //   Chromium 140.0.7339.16 to fail when the object is assigned to a `using` variable,
-            //   with the error:
-            //       TypeError: Symbol(Symbol.dispose) is not a function
-            //   I cannot reproduce this problem in Chrome 140.0.7339.127 nor in Node or workerd,
-            //   so maybe it was a short-lived V8 bug or something. To be safe, though, we use
-            //   `() => this.dispose()`, which seems to always work.
-            value: () => this.dispose(),
-            writable: true,
-            enumerable: false,
-            configurable: true,
-          });
+        // RpcStub/RpcPromise are proxies that reject defineProperty().
+        if (result instanceof RpcStub) {
+          return result;
         }
+
+        // Always install our own dispose wrapper so payload disposal still occurs even when
+        // Symbol.dispose is inherited from a prototype.
+        let existingDispose = (<any>result)[Symbol.dispose];
+
+        // We want the disposer to be non-enumerable as otherwise it gets in the way of things
+        // like unit tests trying to deep-compare the result to an object.
+        Object.defineProperty(result, Symbol.dispose, {
+          // NOTE: Using `this.dispose.bind(this)` here causes Playwright's build of
+          //   Chromium 140.0.7339.16 to fail when the object is assigned to a `using` variable,
+          //   with the error:
+          //       TypeError: Symbol(Symbol.dispose) is not a function
+          //   I cannot reproduce this problem in Chrome 140.0.7339.127 nor in Node or workerd,
+          //   so maybe it was a short-lived V8 bug or something. To be safe, though, we use
+          //   `() => this.dispose()`, which seems to always work.
+          value: () => {
+            try {
+              if (typeof existingDispose === "function") {
+                existingDispose.call(result);
+              }
+            } finally {
+              this.dispose();
+            }
+          },
+          writable: true,
+          enumerable: false,
+          configurable: true,
+        });
       }
 
       return result;

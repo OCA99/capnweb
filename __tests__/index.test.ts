@@ -2325,6 +2325,7 @@ describe("AsyncGenerator over RPC", () => {
 
     // Native-iterator shape.
     expect(gen[Symbol.asyncIterator]()).toBe(gen);
+    expect(Object.hasOwn(gen, Symbol.dispose)).toBe(true);
 
     expect(await gen.next()).toEqual({ done: false, value: 0 });
     expect(await gen.next()).toEqual({ done: false, value: 1 });

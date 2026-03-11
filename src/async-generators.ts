@@ -244,6 +244,14 @@ function addBatchItemDisposers(batch: IteratorResult<unknown>[]) {
   }
 }
 
+function disposeBatch(batch: IteratorResult<unknown>[]) {
+  for (let item of batch) {
+    if (item instanceof Object && Symbol.dispose in item) {
+      (<Disposable><any>item)[Symbol.dispose]();
+    }
+  }
+}
+
 class RemoteAsyncGeneratorEngine {
   private options: NormalizedConsumeOptions = STRICT_OPTIONS;
   private consumeModeEnabled = false;
@@ -348,6 +356,10 @@ class RemoteAsyncGeneratorEngine {
     if (want <= 0) return;
 
     this.inFlightRefill = this.invokeNextBatch(want).then(batch => {
+      if (this.closed || this.done || this.error !== undefined) {
+        disposeBatch(batch);
+        return;
+      }
       for (let item of batch) {
         this.buffer.push(item);
         if (item.done) {
@@ -484,14 +496,21 @@ function createAsyncGeneratorFromHook(hook: StubHook): AsyncGenerator {
     enumerable: false,
     configurable: true,
   });
-  if (!(Symbol.dispose in result)) {
-    Object.defineProperty(result, Symbol.dispose, {
-      value: () => engine.dispose(),
-      writable: true,
-      enumerable: false,
-      configurable: true,
-    });
-  }
+  let existingDispose = (<any>result)[Symbol.dispose];
+  Object.defineProperty(result, Symbol.dispose, {
+    value: () => {
+      try {
+        if (typeof existingDispose === "function") {
+          existingDispose.call(result);
+        }
+      } finally {
+        engine.dispose();
+      }
+    },
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
 
   return result;
 }

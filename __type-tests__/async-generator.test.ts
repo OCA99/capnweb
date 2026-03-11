@@ -7,6 +7,7 @@ interface GeneratorApi {
 }
 
 declare const api: RpcStub<GeneratorApi>
+declare const resolvedGen: RpcAsyncGenerator<number, string, number>
 
 const gen = api.numbers()
 expectAssignable<Promise<AsyncGenerator<number, string, number>>>(gen)
@@ -33,10 +34,10 @@ const opts: RpcConsumeOptions = { maxBufferedItems: 16, minBufferedItems: 4, ref
 void opts
 
 // @ts-expect-error maxBufferedItems must be numeric
-api.numbers().consume({ maxBufferedItems: "nope" })
+resolvedGen.consume({ maxBufferedItems: "nope" })
 
 // @ts-expect-error minBufferedItems must be numeric
-api.numbers().consume({ minBufferedItems: "nope" })
+resolvedGen.consume({ minBufferedItems: "nope" })
 
 // @ts-expect-error refillItems must be numeric
-api.numbers().consume({ refillItems: "nope" })
+resolvedGen.consume({ refillItems: "nope" })
