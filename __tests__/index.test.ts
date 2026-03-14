@@ -2300,6 +2300,135 @@ describe("ReadableStream over RPC", () => {
 
 // =======================================================================================
 
+describe("AsyncGenerator over RPC", () => {
+  class GeneratorTarget extends RpcTarget {
+    async *range(count: number): AsyncGenerator<number, string, number> {
+      let incoming = 0;
+      for (let i = 0; i < count; i++) {
+        incoming = (yield i) ?? incoming;
+      }
+      return `done:${incoming}`;
+    }
+
+    async consumeAll(gen: AsyncGenerator<number>): Promise<number[]> {
+      let result: number[] = [];
+      for await (let value of gen) {
+        result.push(value);
+      }
+      return result;
+    }
+
+    async *job(): AsyncGenerator<string> {
+      yield "Job started";
+      await new Promise(resolve => setTimeout(resolve, 20));
+      yield "Job in progress";
+      await new Promise(resolve => setTimeout(resolve, 20));
+      yield "Job completed";
+    }
+  }
+
+  it("returns a native AsyncGenerator with strict default behavior", async () => {
+    await using harness = new TestHarness(new GeneratorTarget());
+    using gen: any = await harness.stub.range(3);
+
+    // Native-iterator shape.
+    expect(gen[Symbol.asyncIterator]()).toBe(gen);
+    expect(Object.hasOwn(gen, Symbol.dispose)).toBe(true);
+
+    expect(await gen.next()).toEqual({ done: false, value: 0 });
+    expect(await gen.next()).toEqual({ done: false, value: 1 });
+    expect(await gen.next()).toEqual({ done: false, value: 2 });
+    expect(await gen.next(9)).toEqual({ done: true, value: "done:9" });
+
+    // Once done, it should stay done.
+    expect(await gen.next()).toEqual({ done: true, value: undefined });
+  });
+
+  it("consume() reconfigures in-place and reduces roundtrips", async () => {
+    await using harness = new TestHarness(new GeneratorTarget());
+
+    let clientMessages: any[] = [];
+    let origClientSend = harness.clientTransport.send;
+    harness.clientTransport.send = async function(message: string) {
+      clientMessages.push(JSON.parse(message));
+      return origClientSend.call(this, message);
+    };
+
+    using gen: any = await harness.stub.range(20);
+    expect(gen.consume({ maxBufferedItems: 8, minBufferedItems: 4, refillItems: 6 }))
+        .toBe(gen);
+
+    let values: number[] = [];
+    for await (let value of gen) {
+      values.push(value);
+    }
+    expect(values).toEqual(Array.from({ length: 20 }, (_, i) => i));
+
+    let nextBatchCalls = clientMessages.filter(
+        msg => msg[0] === "push" &&
+               msg[1] instanceof Array &&
+               msg[1][0] === "pipeline" &&
+               msg[1][2] instanceof Array &&
+               msg[1][2][0] === "nextBatch");
+
+    // Strict mode would need one advance call per item. Consume mode should use fewer trips.
+    expect(nextBatchCalls.length).toBeLessThan(20);
+  });
+
+  it("throws when next(value) is used after prefetch has started", async () => {
+    await using harness = new TestHarness(new GeneratorTarget());
+    using gen: any = await harness.stub.range(3);
+    gen.consume({ maxBufferedItems: 2, minBufferedItems: 1, refillItems: 2, prefetchOnStart: true });
+
+    await expect(gen.next(123)).rejects.toThrow(
+        "next(value) cannot be used when consumed items are buffered or refilling in flight.");
+  });
+
+  it("consume() defaults do not collapse delayed yields into one burst", async () => {
+    await using harness = new TestHarness(new GeneratorTarget());
+
+    let clientMessages: any[] = [];
+    let origClientSend = harness.clientTransport.send;
+    harness.clientTransport.send = async function(message: string) {
+      clientMessages.push(JSON.parse(message));
+      return origClientSend.call(this, message);
+    };
+
+    using gen: any = await harness.stub.job();
+    gen.consume();
+
+    let values: string[] = [];
+    for await (let value of gen) {
+      values.push(value);
+    }
+    expect(values).toEqual(["Job started", "Job in progress", "Job completed"]);
+
+    let nextBatchCalls = clientMessages.filter(
+        msg => msg[0] === "push" &&
+               msg[1] instanceof Array &&
+               msg[1][0] === "pipeline" &&
+               msg[1][2] instanceof Array &&
+               msg[1][2][0] === "nextBatch");
+
+    // Delayed yields should require multiple batch trips instead of one long coalesced call.
+    expect(nextBatchCalls.length).toBeGreaterThan(1);
+  });
+
+  it("supports passing a client AsyncGenerator as params", async () => {
+    await using harness = new TestHarness(new GeneratorTarget());
+
+    async function* localGen() {
+      yield 10;
+      yield 20;
+      yield 30;
+    }
+
+    expect(await harness.stub.consumeAll(localGen())).toEqual([10, 20, 30]);
+  });
+});
+
+// =======================================================================================
+
 describe("Fetch API types over RPC", () => {
   it("can send Headers over RPC", async () => {
     class HeaderServer extends RpcTarget {
