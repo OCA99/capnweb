@@ -261,3 +261,17 @@ References the readable end of a pipe previously created by a `["pipe"]` message
 This expression can only be used once per pipe. Once the readable end has been retrieved, it is removed from the pipe entry.
 
 See the description of `["pipe"]` in the top-level messages section for an explanation of how pipes and readable streams work together.
+
+`["asyncgen", exportId]`
+
+Represents an `AsyncGenerator`. The `exportId` refers to an export table entry that accepts the
+following direct method calls:
+
+- `next(value?)` - Advance the generator by one step.
+- `return(value?)` - Terminate the generator and optionally provide a return value.
+- `throw(error?)` - Throw into the generator.
+- `nextBatch(count)` - Internal optimization used by `prefetch()`: advances up to `count` times and
+  returns an array of `IteratorResult`s.
+
+`nextBatch()` is semantically equivalent to calling `next()` repeatedly, but batches multiple
+advances into a single roundtrip.

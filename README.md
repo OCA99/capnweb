@@ -202,6 +202,7 @@ The following types can be passed over RPC (in arguments or return values), and 
 * `Uint8Array`
 * `Error` and its well-known subclasses
 * `ReadableStream` and `WritableStream`, with automatic flow control.
+* `AsyncGenerator`, with strict mode by default and optional buffered prefetch via `.prefetch()`.
 * `Headers`, `Request`, and `Response` from the Fetch API.
 
 The following types are not supported as of this writing, but may be added in the future:
@@ -308,6 +309,14 @@ Since all of the not-yet-determined values seen by the callback are represented 
 ### Streaming with flow control
 
 You may pass a `ReadableStream` or `WritableStream` over RPC. When doing so, the RPC system automatically creates an equivalent stream at the other end and pumps bytes (or arbitrarily-typed chunks) across. This is done in such a way as to ensure the available bandwidth is fully utilized while minimizing buffer bloat, by observing the bandwidth-delay product and applying backpressure when too much is written. Multiple streams can be sent across the same connection -- they will be multiplexed appropriately, similar to HTTP/2 stream multiplexing.
+
+### AsyncGenerator
+
+You may return or pass `AsyncGenerator`s over RPC. The receiver gets a native `AsyncGenerator`:
+
+* In default strict mode, each call to `next()` advances the remote generator once.
+* Calling `prefetch(options)` on the generator enables buffered prefetch (in-place) to reduce
+  roundtrips when early advancement is acceptable.
 
 ### Cloudflare Workers RPC interoperability
 

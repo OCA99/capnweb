@@ -39,7 +39,8 @@ export type PropertyPath = (string | number)[];
 
 type TypeForRpc = "unsupported" | "primitive" | "object" | "function" | "array" | "date" |
     "bigint" | "bytes" | "stub" | "rpc-promise" | "rpc-target" | "rpc-thenable" | "error" |
-    "undefined" | "writable" | "readable" | "headers" | "request" | "response";
+    "undefined" | "writable" | "readable" | "async-generator" | "headers" | "request" |
+    "response";
 
 const AsyncFunction = (async function () {}).constructor;
 
@@ -145,6 +146,10 @@ export function typeForRpc(value: unknown): TypeForRpc {
         return "error";
       }
 
+      if (Object.prototype.toString.call(value) === "[object AsyncGenerator]") {
+        return "async-generator";
+      }
+
       return "unsupported";
   }
 }
@@ -180,6 +185,18 @@ export let streamImpl: StreamImpl = {
   createReadableStreamHook: streamNotLoaded
 };
 
+function asyncGeneratorNotLoaded(): never {
+  throw new Error("AsyncGenerator implementation was not loaded.");
+}
+
+// AsyncGenerator support is implemented in `async-generators.ts`. We can't import it here because
+// it would create an import cycle, so instead we define hook functions that async-generators.ts
+// will overwrite.
+export let asyncGeneratorImpl: AsyncGeneratorImpl = {
+  createAsyncGeneratorHook: asyncGeneratorNotLoaded,
+  createAsyncGeneratorFromHook: asyncGeneratorNotLoaded,
+};
+
 export type StreamImpl = {
   // Creates a StubHook wrapping a local WritableStream for export.
   // The hook will call getWriter() on the stream, locking it.
@@ -191,6 +208,14 @@ export type StreamImpl = {
   // Creates a minimal StubHook wrapping a local ReadableStream for disposal tracking.
   // The hook's dispose() will cancel the stream.
   createReadableStreamHook(stream: ReadableStream): StubHook;
+}
+
+export type AsyncGeneratorImpl = {
+  // Creates a StubHook wrapping a local AsyncGenerator for export.
+  createAsyncGeneratorHook(gen: AsyncGenerator): StubHook;
+
+  // Creates a local native AsyncGenerator that forwards operations to a remote hook.
+  createAsyncGeneratorFromHook(hook: StubHook): AsyncGenerator;
 }
 
 // Inner interface backing an RpcStub or RpcPromise.
@@ -802,7 +827,8 @@ export class RpcPayload {
   // return, so that we can make sure they are not disposed before the pipeline ends.
   //
   // This is initialized on first use.
-  private rpcTargets?: Map<RpcTarget | Function | WritableStream | ReadableStream, StubHook>;
+  private rpcTargets?: Map<
+      RpcTarget | Function | WritableStream | ReadableStream | AsyncGenerator, StubHook>;
 
   // Get the StubHook representing the given RpcTarget found inside this payload.
   public getHookForRpcTarget(target: RpcTarget | Function, parent: object | undefined,
@@ -934,6 +960,37 @@ export class RpcPayload {
     }
   }
 
+  // Get the StubHook representing the given AsyncGenerator found inside this payload.
+  public getHookForAsyncGenerator(gen: AsyncGenerator, parent: object | undefined,
+                                  dupStubs: boolean = true): StubHook {
+    if (this.source === "params") {
+      return asyncGeneratorImpl.createAsyncGeneratorHook(gen);
+    } else if (this.source === "return") {
+      let hook = this.rpcTargets?.get(gen);
+      if (hook) {
+        if (dupStubs) {
+          return hook.dup();
+        } else {
+          this.rpcTargets?.delete(gen);
+          return hook;
+        }
+      } else {
+        hook = asyncGeneratorImpl.createAsyncGeneratorHook(gen);
+        if (dupStubs) {
+          if (!this.rpcTargets) {
+            this.rpcTargets = new Map;
+          }
+          this.rpcTargets.set(gen, hook);
+          return hook.dup();
+        } else {
+          return hook;
+        }
+      }
+    } else {
+      throw new Error("owned payload shouldn't contain raw AsyncGenerators");
+    }
+  }
+
   private deepCopy(
       value: unknown, oldParent: object | undefined, property: string | number, parent: object,
       dupStubs: boolean, owner: RpcPayload | null): unknown {
@@ -1044,6 +1101,18 @@ export class RpcPayload {
         }
         this.hooks!.push(hook);
         return stream;
+      }
+
+      case "async-generator": {
+        let gen = <AsyncGenerator>value;
+        let hook: StubHook;
+        if (owner) {
+          hook = owner.getHookForAsyncGenerator(gen, oldParent, dupStubs);
+        } else {
+          hook = asyncGeneratorImpl.createAsyncGeneratorHook(gen);
+        }
+        this.hooks!.push(hook);
+        return gen;
       }
 
       case "headers":
@@ -1214,23 +1283,38 @@ export class RpcPayload {
 
       // Add disposer to result.
       if (result instanceof Object) {
-        if (!(Symbol.dispose in result)) {
-          // We want the disposer to be non-enumerable as otherwise it gets in the way of things
-          // like unit tests trying to deep-compare the result to an object.
-          Object.defineProperty(result, Symbol.dispose, {
-            // NOTE: Using `this.dispose.bind(this)` here causes Playwright's build of
-            //   Chromium 140.0.7339.16 to fail when the object is assigned to a `using` variable,
-            //   with the error:
-            //       TypeError: Symbol(Symbol.dispose) is not a function
-            //   I cannot reproduce this problem in Chrome 140.0.7339.127 nor in Node or workerd,
-            //   so maybe it was a short-lived V8 bug or something. To be safe, though, we use
-            //   `() => this.dispose()`, which seems to always work.
-            value: () => this.dispose(),
-            writable: true,
-            enumerable: false,
-            configurable: true,
-          });
+        // RpcStub/RpcPromise are proxies that reject defineProperty().
+        if (result instanceof RpcStub) {
+          return result;
         }
+
+        // Always install our own dispose wrapper so payload disposal still occurs even when
+        // Symbol.dispose is inherited from a prototype.
+        let existingDispose = (<any>result)[Symbol.dispose];
+
+        // We want the disposer to be non-enumerable as otherwise it gets in the way of things
+        // like unit tests trying to deep-compare the result to an object.
+        Object.defineProperty(result, Symbol.dispose, {
+          // NOTE: Using `this.dispose.bind(this)` here causes Playwright's build of
+          //   Chromium 140.0.7339.16 to fail when the object is assigned to a `using` variable,
+          //   with the error:
+          //       TypeError: Symbol(Symbol.dispose) is not a function
+          //   I cannot reproduce this problem in Chrome 140.0.7339.127 nor in Node or workerd,
+          //   so maybe it was a short-lived V8 bug or something. To be safe, though, we use
+          //   `() => this.dispose()`, which seems to always work.
+          value: () => {
+            try {
+              if (typeof existingDispose === "function") {
+                existingDispose.call(result);
+              }
+            } finally {
+              this.dispose();
+            }
+          },
+          writable: true,
+          enumerable: false,
+          configurable: true,
+        });
       }
 
       return result;
@@ -1379,6 +1463,20 @@ export class RpcPayload {
         return;
       }
 
+      case "async-generator": {
+        let gen = <AsyncGenerator>value;
+        let hook = this.rpcTargets?.get(gen);
+        if (hook) {
+          this.rpcTargets!.delete(gen);
+        } else {
+          hook = asyncGeneratorImpl.createAsyncGeneratorHook(gen);
+        }
+
+        hook.dispose();
+
+        return;
+      }
+
       default:
         kind satisfies never;
         return;
@@ -1416,6 +1514,7 @@ export class RpcPayload {
       case "rpc-target":
       case "writable":
       case "readable":
+      case "async-generator":
       case "headers":
       case "request":
       case "response":
@@ -1560,6 +1659,13 @@ function followPath(value: unknown, parent: object | undefined,
         // TODO: Do we want to support pipelining on ReadableStream at all? It doesn't seem like
         //   it really makes sense... you might as well just wait for the promise for the
         //   ReadableStream to resolve, and then read it, because you'll get bytes just as fast.
+        value = undefined;
+        break;
+
+      case "async-generator":
+        // Similar to streams, we don't currently support promise pipelining on AsyncGenerator
+        // values. The caller should await the AsyncGenerator itself, then use next()/return()/
+        // throw() on the resulting object.
         value = undefined;
         break;
 
