@@ -270,7 +270,7 @@ following direct method calls:
 - `next(value?)` - Advance the generator by one step.
 - `return(value?)` - Terminate the generator and optionally provide a return value.
 - `throw(error?)` - Throw into the generator.
-- `nextBatch(count)` - Internal optimization used by `consume()`: advances up to `count` times and
+- `nextBatch(count)` - Internal optimization used by `prefetch()`: advances up to `count` times and
   returns an array of `IteratorResult`s.
 
 `nextBatch()` is semantically equivalent to calling `next()` repeatedly, but batches multiple

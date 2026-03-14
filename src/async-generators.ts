@@ -74,7 +74,7 @@ class AsyncGeneratorStubHook extends StubHook {
             if (state.pendingNext) {
               if (value !== undefined) {
                 throw new Error(
-                    "Cannot call next(value) while AsyncGenerator consume prefetch is in flight.");
+                    "Cannot call next(value) while AsyncGenerator prefetch is in flight.");
               }
               let pending = state.pendingNext;
               try {
@@ -235,13 +235,16 @@ class AsyncGeneratorStubHook extends StubHook {
   }
 }
 
-export type RpcConsumeOptions = {
+export type RpcPrefetchOptions = {
   maxBufferedItems?: number;
   minBufferedItems?: number;
   refillItems?: number;
   prefetchOnStart?: boolean;
   signal?: AbortSignal;
 }
+
+/** @deprecated Use RpcPrefetchOptions. */
+export type RpcConsumeOptions = RpcPrefetchOptions;
 
 type NormalizedConsumeOptions = {
   maxBufferedItems: number;
@@ -258,14 +261,14 @@ const STRICT_OPTIONS: NormalizedConsumeOptions = {
   prefetchOnStart: false,
 };
 
-const DEFAULT_CONSUME_OPTIONS: NormalizedConsumeOptions = {
+const DEFAULT_PREFETCH_OPTIONS: NormalizedConsumeOptions = {
   maxBufferedItems: 128,
   minBufferedItems: 32,
   refillItems: 64,
   prefetchOnStart: true,
 };
 
-function normalizeOptions(options: RpcConsumeOptions | undefined,
+function normalizeOptions(options: RpcPrefetchOptions | undefined,
                           base: NormalizedConsumeOptions): NormalizedConsumeOptions {
   let merged: NormalizedConsumeOptions = {
     ...base,
@@ -341,7 +344,7 @@ function disposeBatch(batch: IteratorResult<unknown>[]) {
 
 class RemoteAsyncGeneratorEngine {
   private options: NormalizedConsumeOptions = STRICT_OPTIONS;
-  private consumeModeEnabled = false;
+  private prefetchModeEnabled = false;
   private inFlightRefill?: Promise<void>;
   private buffer: IteratorResult<unknown>[] = [];
   private done = false;
@@ -351,19 +354,24 @@ class RemoteAsyncGeneratorEngine {
 
   constructor(private hook: StubHook) {}
 
-  consume(options?: RpcConsumeOptions) {
+  prefetch(options?: RpcPrefetchOptions) {
     if (this.closed) return;
 
-    let base = this.consumeModeEnabled ? this.options : DEFAULT_CONSUME_OPTIONS;
-    if (!options) base = DEFAULT_CONSUME_OPTIONS;
+    let base = this.prefetchModeEnabled ? this.options : DEFAULT_PREFETCH_OPTIONS;
+    if (!options) base = DEFAULT_PREFETCH_OPTIONS;
     this.options = normalizeOptions(options, base);
-    this.consumeModeEnabled = true;
+    this.prefetchModeEnabled = true;
 
     this.attachSignal(this.options.signal);
 
     if (this.options.prefetchOnStart) {
       this.maybeRefill();
     }
+  }
+
+  consume(options?: RpcPrefetchOptions) {
+    // Backwards-compatibility alias.
+    this.prefetch(options);
   }
 
   private attachSignal(signal: AbortSignal | undefined) {
@@ -474,7 +482,7 @@ class RemoteAsyncGeneratorEngine {
       }
       if (this.buffer.length > 0 || this.inFlightRefill) {
         throw new Error(
-            "next(value) cannot be used when consumed items are buffered or refilling in flight.");
+            "next(value) cannot be used when prefetched items are buffered or refilling in flight.");
       }
       let result = await this.invokeNext(value);
       if (result.done) {
@@ -544,7 +552,8 @@ class RemoteAsyncGeneratorEngine {
 }
 
 type RpcAsyncGeneratorRuntime = AsyncGenerator & {
-  consume(options?: RpcConsumeOptions): AsyncGenerator;
+  prefetch(options?: RpcPrefetchOptions): AsyncGenerator;
+  consume(options?: RpcPrefetchOptions): AsyncGenerator;
 };
 
 function createAsyncGeneratorFromHook(hook: StubHook): AsyncGenerator {
@@ -571,9 +580,19 @@ function createAsyncGeneratorFromHook(hook: StubHook): AsyncGenerator {
     enumerable: false,
     configurable: true,
   });
+  Object.defineProperty(result, "prefetch", {
+    value: (options?: RpcPrefetchOptions) => {
+      engine.prefetch(options);
+      return result;
+    },
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
   Object.defineProperty(result, "consume", {
-    value: (options?: RpcConsumeOptions) => {
-      engine.consume(options);
+    value: (options?: RpcPrefetchOptions) => {
+      // Backwards-compatibility alias.
+      engine.prefetch(options);
       return result;
     },
     writable: true,

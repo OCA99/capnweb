@@ -5,7 +5,16 @@
 import { RpcTarget as RpcTargetImpl, RpcStub as RpcStubImpl, RpcPromise as RpcPromiseImpl } from "./core.js";
 import { serialize, deserialize } from "./serialize.js";
 import { RpcTransport, RpcSession as RpcSessionImpl, RpcSessionOptions } from "./rpc.js";
-import { RpcTargetBranded, RpcCompatible, RpcConsumeOptions, RpcAsyncGenerator, Stub, Stubify, __RPC_TARGET_BRAND } from "./types.js";
+import {
+  RpcTargetBranded,
+  RpcCompatible,
+  RpcPrefetchOptions,
+  RpcConsumeOptions,
+  RpcAsyncGenerator,
+  Stub,
+  Stubify,
+  __RPC_TARGET_BRAND
+} from "./types.js";
 import { newWebSocketRpcSession as newWebSocketRpcSessionImpl,
          newWorkersWebSocketRpcResponse } from "./websocket.js";
 import { newHttpBatchRpcSession as newHttpBatchRpcSessionImpl,
@@ -22,7 +31,14 @@ forceInitAsyncGenerators();
 // Re-export public API types.
 export { serialize, deserialize, newWorkersWebSocketRpcResponse, newHttpBatchRpcResponse,
          nodeHttpBatchRpcResponse };
-export type { RpcTransport, RpcSessionOptions, RpcCompatible, RpcConsumeOptions, RpcAsyncGenerator };
+export type {
+  RpcTransport,
+  RpcSessionOptions,
+  RpcCompatible,
+  RpcPrefetchOptions,
+  RpcConsumeOptions,
+  RpcAsyncGenerator
+};
 
 // Hack the type system to make RpcStub's types work nicely!
 /**

@@ -2344,7 +2344,7 @@ describe("AsyncGenerator over RPC", () => {
     expect(await gen.next()).toEqual({ done: true, value: undefined });
   });
 
-  it("consume() reconfigures in-place and reduces roundtrips", async () => {
+  it("prefetch() reconfigures in-place and reduces roundtrips", async () => {
     await using harness = new TestHarness(new GeneratorTarget());
 
     let clientMessages: any[] = [];
@@ -2355,7 +2355,7 @@ describe("AsyncGenerator over RPC", () => {
     };
 
     using gen: any = await harness.stub.range(20);
-    expect(gen.consume({ maxBufferedItems: 8, minBufferedItems: 4, refillItems: 6 }))
+    expect(gen.prefetch({ maxBufferedItems: 8, minBufferedItems: 4, refillItems: 6 }))
         .toBe(gen);
 
     let values: number[] = [];
@@ -2378,13 +2378,13 @@ describe("AsyncGenerator over RPC", () => {
   it("throws when next(value) is used after prefetch has started", async () => {
     await using harness = new TestHarness(new GeneratorTarget());
     using gen: any = await harness.stub.range(3);
-    gen.consume({ maxBufferedItems: 2, minBufferedItems: 1, refillItems: 2, prefetchOnStart: true });
+    gen.prefetch({ maxBufferedItems: 2, minBufferedItems: 1, refillItems: 2, prefetchOnStart: true });
 
     await expect(gen.next(123)).rejects.toThrow(
-        "next(value) cannot be used when consumed items are buffered or refilling in flight.");
+        "next(value) cannot be used when prefetched items are buffered or refilling in flight.");
   });
 
-  it("consume() defaults do not collapse delayed yields into one burst", async () => {
+  it("prefetch() defaults do not collapse delayed yields into one burst", async () => {
     await using harness = new TestHarness(new GeneratorTarget());
 
     let clientMessages: any[] = [];
@@ -2395,7 +2395,7 @@ describe("AsyncGenerator over RPC", () => {
     };
 
     using gen: any = await harness.stub.job();
-    gen.consume();
+    gen.prefetch();
 
     let values: string[] = [];
     for await (let value of gen) {

@@ -21,7 +21,7 @@ export interface RpcTargetBranded {
 // `any` into inference.
 export type Stubable = RpcTargetBranded | ((...args: never[]) => unknown);
 
-export type RpcConsumeOptions = {
+export type RpcPrefetchOptions = {
   maxBufferedItems?: number;
   minBufferedItems?: number;
   refillItems?: number;
@@ -29,9 +29,14 @@ export type RpcConsumeOptions = {
   signal?: AbortSignal;
 };
 
+/** @deprecated Use RpcPrefetchOptions. */
+export type RpcConsumeOptions = RpcPrefetchOptions;
+
 export interface RpcAsyncGenerator<Y = unknown, R = any, N = unknown>
     extends AsyncGenerator<Y, R, N> {
-  consume(options?: RpcConsumeOptions): this;
+  prefetch(options?: RpcPrefetchOptions): this;
+  /** @deprecated Use prefetch(). */
+  consume(options?: RpcPrefetchOptions): this;
 }
 
 type IsUnknown<T> = unknown extends T ? ([T] extends [unknown] ? true : false) : false;

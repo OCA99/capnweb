@@ -1,4 +1,4 @@
-import { RpcAsyncGenerator, RpcStub, RpcTarget, type RpcConsumeOptions } from "../src/index.js"
+import { RpcAsyncGenerator, RpcStub, RpcTarget, type RpcPrefetchOptions } from "../src/index.js"
 import { expectAssignable, expectType } from "./helpers.js"
 
 interface GeneratorApi {
@@ -16,10 +16,10 @@ async function assertTypes() {
   const resolved = await gen
   expectType<RpcAsyncGenerator<number, string, number>>(resolved)
 
-  const same = resolved.consume({ maxBufferedItems: 32, minBufferedItems: 8, refillItems: 16 })
+  const same = resolved.prefetch({ maxBufferedItems: 32, minBufferedItems: 8, refillItems: 16 })
   expectType<RpcAsyncGenerator<number, string, number>>(same)
 
-  const strict = resolved.consume({ maxBufferedItems: 1, minBufferedItems: 0, refillItems: 1 })
+  const strict = resolved.prefetch({ maxBufferedItems: 1, minBufferedItems: 0, refillItems: 1 })
   expectType<RpcAsyncGenerator<number, string, number>>(strict)
 
   const first = await resolved.next()
@@ -30,14 +30,14 @@ async function assertTypes() {
 
 void assertTypes
 
-const opts: RpcConsumeOptions = { maxBufferedItems: 16, minBufferedItems: 4, refillItems: 8 }
+const opts: RpcPrefetchOptions = { maxBufferedItems: 16, minBufferedItems: 4, refillItems: 8 }
 void opts
 
 // @ts-expect-error maxBufferedItems must be numeric
-resolvedGen.consume({ maxBufferedItems: "nope" })
+resolvedGen.prefetch({ maxBufferedItems: "nope" })
 
 // @ts-expect-error minBufferedItems must be numeric
-resolvedGen.consume({ minBufferedItems: "nope" })
+resolvedGen.prefetch({ minBufferedItems: "nope" })
 
 // @ts-expect-error refillItems must be numeric
-resolvedGen.consume({ refillItems: "nope" })
+resolvedGen.prefetch({ refillItems: "nope" })
