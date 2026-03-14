@@ -2,7 +2,7 @@
 // Licensed under the MIT license found in the LICENSE.txt file or at:
 //     https://opensource.org/license/mit
 
-import { StubHook, RpcPayload, typeForRpc, RpcStub, RpcPromise, LocatedPromise, RpcTarget, unwrapStubAndPath, streamImpl, asyncGeneratorImpl, PromiseStubHook, PayloadStubHook } from "./core.js";
+import { StubHook, RpcPayload, typeForRpc, RpcStub, RpcPromise, LocatedPromise, RpcTarget, unwrapStubAndPath, streamImpl, PromiseStubHook, PayloadStubHook } from "./core.js";
 
 export type ImportId = number;
 export type ExportId = number;
@@ -387,22 +387,13 @@ export class Devaluator {
         return ["readable", importId];
       }
 
-      case "async-generator": {
-        if (!this.source) {
-          throw new Error("Can't serialize AsyncGenerator in this context.");
-        }
-
-        let hook = this.source.getHookForAsyncGenerator(<AsyncGenerator>value, parent);
-        return this.devaluateHook("asyncgen", hook);
-      }
-
       default:
         kind satisfies never;
         throw new Error("unreachable");
     }
   }
 
-  private devaluateHook(type: "export" | "promise" | "writable" | "asyncgen", hook: StubHook): unknown {
+  private devaluateHook(type: "export" | "promise" | "writable", hook: StubHook): unknown {
     if (!this.exports) this.exports = [];
     let exportId = type === "promise" ? this.exporter.exportPromise(hook)
                                       : this.exporter.exportStub(hook);
@@ -808,15 +799,6 @@ export class Evaluator {
             let hook = streamImpl.createReadableStreamHook(stream);
             this.hooks.push(hook);
             return stream;
-          }
-          break;
-
-        case "asyncgen":
-          if (typeof value[1] == "number") {
-            let hook = this.importer.importStub(value[1]);
-            let gen = asyncGeneratorImpl.createAsyncGeneratorFromHook(hook);
-            this.hooks.push(hook);
-            return gen;
           }
           break;
       }

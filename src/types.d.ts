@@ -21,19 +21,6 @@ export interface RpcTargetBranded {
 // `any` into inference.
 export type Stubable = RpcTargetBranded | ((...args: never[]) => unknown);
 
-export type RpcConsumeOptions = {
-  maxBufferedItems?: number;
-  minBufferedItems?: number;
-  refillItems?: number;
-  prefetchOnStart?: boolean;
-  signal?: AbortSignal;
-};
-
-export interface RpcAsyncGenerator<Y = unknown, R = any, N = unknown>
-    extends AsyncGenerator<Y, R, N> {
-  consume(options?: RpcConsumeOptions): this;
-}
-
 type IsUnknown<T> = unknown extends T ? ([T] extends [unknown] ? true : false) : false;
 
 // Types that can be passed over RPC
@@ -100,7 +87,6 @@ type BaseType =
   | Date
   | Error
   | RegExp
-  | AsyncGenerator<unknown, unknown, unknown>
   | ReadableStream<Uint8Array>
   | WritableStream<any>  // Chunk type can be any RPC-compatible type
   | Request
@@ -111,8 +97,6 @@ type BaseType =
 export type Stubify<T> =
   T extends Stubable ? Stub<T>
   : T extends Promise<infer U> ? Stubify<U>
-  : T extends AsyncGenerator<infer Y, infer R, infer N>
-      ? RpcAsyncGenerator<Stubify<Y>, Stubify<R>, Unstubify<N>>
   : T extends StubBase<any> ? T
   : T extends Map<infer K, infer V> ? Map<Stubify<K>, Stubify<V>>
   : T extends Set<infer V> ? Set<Stubify<V>>
@@ -136,8 +120,6 @@ type UnstubifyInner<T> =
   // is already assignable to the value type (important for callback contextual typing).
   T extends StubBase<infer V> ? (T extends V ? UnstubifyInner<V> : (T | UnstubifyInner<V>))
   : T extends Promise<infer U> ? UnstubifyInner<U>
-  : T extends RpcAsyncGenerator<infer Y, infer R, infer N>
-      ? AsyncGenerator<Unstubify<Y>, Unstubify<R>, Unstubify<N>>
   : T extends Map<infer K, infer V> ? Map<Unstubify<K>, Unstubify<V>>
   : T extends Set<infer V> ? Set<Unstubify<V>>
   : T extends [] ? []
